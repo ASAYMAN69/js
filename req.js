@@ -1,5 +1,5 @@
 /**
- * Declarative HTTP Request Handler (script.js)
+ * Declarative HTTP Request Handler (req.js)
  * 
  * Automatically captures configurations declared in script tags (or global scope),
  * supporting multiple independent script blocks and endpoints on the same page.
@@ -112,7 +112,7 @@ if (typeof window !== 'undefined') {
         try {
           return new Function('return ' + rawObjStr)();
         } catch (e3) {
-          console.warn('[script.js] Failed to parse ' + varName + ' object:', rawObjStr);
+          console.warn('[req.js] Failed to parse ' + varName + ' object:', rawObjStr);
           return null;
         }
       }
@@ -233,7 +233,7 @@ if (typeof window !== 'undefined') {
     const { endpoint, method = 'GET', query, body, response: responseMap } = config;
 
     if (!endpoint) {
-      console.error('[script.js] API endpoint is not defined for configuration:', config);
+      console.error('[req.js] API endpoint is not defined for configuration:', config);
       return;
     }
 
@@ -274,11 +274,11 @@ if (typeof window !== 'undefined') {
     }
 
     try {
-      console.log(`[script.js] [${upperMethod}] ${requestUrl}`, payload || '');
+      console.log(`[req.js] [${upperMethod}] ${requestUrl}`, payload || '');
       const res = await fetch(requestUrl, fetchOptions);
 
       if (!res.ok) {
-        console.warn(`[script.js] Server responded with status: ${res.status} ${res.statusText}`);
+        console.warn(`[req.js] Server responded with status: ${res.status} ${res.statusText}`);
       }
 
       let data;
@@ -294,7 +294,7 @@ if (typeof window !== 'undefined') {
         }
       }
 
-      console.log('[script.js] Received response:', data);
+      console.log('[req.js] Received response:', data);
 
       // 4. Map Response into Target DOM Elements
       if (responseMap && typeof responseMap === 'object' && data) {
@@ -304,7 +304,7 @@ if (typeof window !== 'undefined') {
             const val = getNestedValue(data, responseKey);
             setElementValue(targetElem, val);
           } else {
-            console.warn(`[script.js] Target element not found for selector: "${targetSelector}"`);
+            console.warn(`[req.js] Target element not found for selector: "${targetSelector}"`);
           }
         }
       }
@@ -315,7 +315,7 @@ if (typeof window !== 'undefined') {
       }));
 
     } catch (err) {
-      console.error('[script.js] Request failed:', err);
+      console.error('[req.js] Request failed:', err);
       window.dispatchEvent(new CustomEvent('accreq:error', {
         detail: { config, error: err }
       }));
@@ -333,20 +333,29 @@ if (typeof window !== 'undefined') {
 
     configs.forEach((config, index) => {
       if (!config.submit) {
-        console.warn(`[script.js] Configuration #${index + 1} found without SUBMIT selector:`, config);
+        console.warn(`[req.js] Configuration #${index + 1} found without SUBMIT selector:`, config);
         return;
       }
 
       const submitElem = getElement(config.submit);
       if (!submitElem) {
-        console.warn(`[script.js] Submit element "${config.submit}" not found in DOM.`);
+        console.warn(`[req.js] Submit element "${config.submit}" not found in DOM.`);
         return;
       }
 
-      // Attach listener specifically for this config block
-      const eventType = submitElem.tagName.toLowerCase() === 'form' ? 'submit' : 'click';
-      submitElem.addEventListener(eventType, (e) => handleRequest(config, e));
-      console.log(`[script.js] Bound [${config.method || 'GET'}] (${config.endpoint}) to "${config.submit}"`);
+      // Intercept both form submission (if inside a form) and element click
+      const formElem = submitElem.closest ? submitElem.closest('form') : (submitElem.tagName.toLowerCase() === 'form' ? submitElem : null);
+      if (formElem && !formElem._accreq_bound) {
+        formElem._accreq_bound = true;
+        formElem.addEventListener('submit', (e) => handleRequest(config, e));
+      }
+
+      if (submitElem.tagName.toLowerCase() !== 'form' && !submitElem._accreq_bound) {
+        submitElem._accreq_bound = true;
+        submitElem.addEventListener('click', (e) => handleRequest(config, e));
+      }
+
+      console.log(`[req.js] Bound [${config.method || 'GET'}] (${config.endpoint}) to "${config.submit}"`);
     });
   }
 
