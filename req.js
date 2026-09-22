@@ -87,20 +87,16 @@ if (typeof window !== 'undefined') {
   }
 
   /**
-   * Parses JSON or loose object literal from text.
+   * Safely parses an object string representation into a JavaScript object.
    */
-  function parseObjectConfig(varName, text) {
-    const regex = new RegExp('(?:const|let|var)?\\s*' + varName + '\\s*=\\s*(\\{[\\s\\S]*?\\})', 'i');
-    const objMatch = text.match(regex);
-    if (!objMatch) return null;
-
-    let rawObjStr = objMatch[1];
+  function parseObjectString(rawObjStr) {
+    if (!rawObjStr) return null;
     try {
       return JSON.parse(rawObjStr);
     } catch (e) {
       try {
         const formatted = rawObjStr
-          .replace(/([{\s,])(\w+)\s*:/g, '$1"$2":') // Quote keys: key: -> "key":
+          .replace(/([{\s,])(\w+)\s*:/g, '$1"$2":') // Quote unquoted keys: key: -> "key":
           .replace(/:\s*#([a-zA-Z0-9_\-]+)/g, ':"#$1"') // Quote unquoted ids: :#id -> :"#id"
           .replace(/:\s*([a-zA-Z0-9_\-]+)(?=[,\}\s])/g, function (m, p1) { // Quote other unquoted values
             if (p1 === 'true' || p1 === 'false' || p1 === 'null' || !isNaN(p1)) return m;
@@ -112,11 +108,39 @@ if (typeof window !== 'undefined') {
         try {
           return new Function('return ' + rawObjStr)();
         } catch (e3) {
-          console.warn('[req.js] Failed to parse ' + varName + ' object:', rawObjStr);
+          console.warn('[req.js] Failed to parse object:', rawObjStr);
           return null;
         }
       }
     }
+  }
+
+  /**
+   * Extracts balanced object { ... } matching `varName = { ... }`
+   */
+  function extractObject(varName, text) {
+    const markerRegex = new RegExp('(?:const|let|var)?\\s*' + varName + '\\s*=\\s*\\{', 'i');
+    const match = text.match(markerRegex);
+    if (!match) return null;
+
+    const startIndex = match.index + match[0].length - 1; // start of '{'
+    let braceCount = 0;
+    let endIndex = -1;
+
+    for (let i = startIndex; i < text.length; i++) {
+      if (text[i] === '{') braceCount++;
+      else if (text[i] === '}') {
+        braceCount--;
+        if (braceCount === 0) {
+          endIndex = i;
+          break;
+        }
+      }
+    }
+
+    if (endIndex === -1) return null;
+    const rawObjStr = text.substring(startIndex, endIndex + 1);
+    return parseObjectString(rawObjStr);
   }
 
   /**
@@ -146,9 +170,9 @@ if (typeof window !== 'undefined') {
     }
 
     // 4. Extract Object definitions: QUERY, BODY, RESPONSE
-    config.query = parseObjectConfig('QUERY', blockText);
-    config.body = parseObjectConfig('BODY', blockText);
-    config.response = parseObjectConfig('RESPONSE', blockText);
+    config.query = extractObject('QUERY', blockText);
+    config.body = extractObject('BODY', blockText);
+    config.response = extractObject('RESPONSE', blockText);
 
     return (config.endpoint || config.submit) ? config : null;
   }
@@ -157,36 +181,15 @@ if (typeof window !== 'undefined') {
    * Splits script text into separate configuration blocks if multiple exist inside one script tag.
    */
   function parseScriptBlocks(scriptText) {
+    // Split by occurrences of API_ENDPOINT / ENDPOINT / API if multiple exist
+    const splitKeywords = /(?=(?:const|let|var)?\s*(?:API_ENDPOINT|ENDPOINT|API)\s*=)/gi;
+    const chunks = scriptText.split(splitKeywords).map(s => s.trim()).filter(Boolean);
+
     const blocks = [];
-
-    // Check if script has block scoping `{ ... }`
-    const blockRegex = /\{([\s\S]*?(?:API_ENDPOINT|ENDPOINT|API|SUBMIT)[\s\S]*?)\}/gi;
-    let match;
-    let foundScopedBlocks = false;
-
-    while ((match = blockRegex.exec(scriptText)) !== null) {
-      const parsed = parseSingleConfigBlock(match[1]);
-      if (parsed) {
-        blocks.push(parsed);
-        foundScopedBlocks = true;
-      }
-    }
-
-    if (!foundScopedBlocks) {
-      // If no { ... } wrapping, check if there are multiple occurrences of API_ENDPOINT / ENDPOINT
-      const splitKeywords = /(?=(?:const|let|var)?\s*(?:API_ENDPOINT|ENDPOINT|API)\s*=)/gi;
-      const chunks = scriptText.split(splitKeywords);
-
-      if (chunks.length > 1) {
-        chunks.forEach(chunk => {
-          const parsed = parseSingleConfigBlock(chunk);
-          if (parsed) blocks.push(parsed);
-        });
-      } else {
-        const parsed = parseSingleConfigBlock(scriptText);
-        if (parsed) blocks.push(parsed);
-      }
-    }
+    chunks.forEach(chunk => {
+      const parsed = parseSingleConfigBlock(chunk);
+      if (parsed) blocks.push(parsed);
+    });
 
     return blocks;
   }
